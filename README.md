@@ -11,3 +11,10 @@ pulse agent
 * network
 * NTP offset
 * swap
+
+
+## the must have
+
+* CPU
+* memory (include swap usage)
+* network
