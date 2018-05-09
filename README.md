@@ -13,7 +13,7 @@ pulse agent
 * swap
 
 
-## the must have
+## The must have
 
 * CPU
 * memory (include swap usage)
