@@ -18,3 +18,8 @@ pulse agent
 * CPU
 * memory (include swap usage)
 * network
+
+
+## Find hosts
+
+Find hosts automatically (Service discovery) 
