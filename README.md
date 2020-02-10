@@ -5,13 +5,9 @@ pulse agent
 ## What to report
 
 * CPU
-* disk
-* load averages
-* memory
-* network
-* NTP offset
-* swap
-
+* Disk
+* Memory
+* Network
 
 ## The must have
 
@@ -22,4 +18,4 @@ pulse agent
 
 ## Find hosts
 
-Find hosts automatically (Service discovery) 
+Find hosts automatically (Service discovery)
