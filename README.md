@@ -1,21 +1,12 @@
 # pulse (prototype)
 pulse agent
 
-
 ## What to report
 
 * CPU
 * Disk
-* Memory
+* Memory (include swap usage)
 * Network
 
-## The must have
-
-* CPU
-* memory (include swap usage)
-* network
-
-
-## Find hosts
-
-Find hosts automatically (Service discovery)
+## procstat
+Get detailed process information
