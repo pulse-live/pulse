@@ -10,3 +10,5 @@ pulse agent
 
 ## procstat
 Get detailed process information
+
+Consider [timescale](https://www.timescale.com/)
