@@ -1,0 +1,37 @@
+# Standalone monitoring. Running this file explicitly sends requests to these URLs.
+[agent]
+mode = "standalone"
+state_dir = ".pulse/standalone"
+
+[output]
+stdout = true
+
+[network]
+allow_private_networks = false
+
+[limits]
+max_concurrent_probes = 4
+max_checks = 128
+min_interval_ms = 1000
+max_timeout_ms = 10000
+max_result_bytes = 65536
+
+[[probes]]
+id = "homepage"
+kind = "http"
+target = "https://example.com"
+interval_ms = 300000
+timeout_ms = 5000
+phase_offset_ms = 0
+
+[[probes]]
+id = "headers"
+kind = "http"
+target = "https://example.org"
+interval_ms = 300000
+timeout_ms = 5000
+phase_offset_ms = 150000
+
+[probes.http]
+method = "HEAD"
+max_redirects = 0

@@ -1,9 +1,133 @@
 [package]
 name = "pulse"
 version = "0.1.0"
-authors = ["nbari <nbari@tequila.io>"]
-edition = "2018"
+authors = ["Team Pulse.live <team@pulse.live>"]
+description = "A lightweight, autonomous monitoring agent for endpoint probing and infrastructure telemetry"
+repository = "https://github.com/pulse-live/pulse"
+homepage = "https://pulse.live"
+readme = "README.md"
+keywords = ["monitoring", "agent", "telemetry", "probe", "cli"]
+categories = ["command-line-utilities", "network-programming"]
+license = "BSD-3-Clause"
+edition = "2024"
+rust-version = "1.88"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[features]
+default = []
+telemetry = [
+    "dep:opentelemetry",
+    "dep:opentelemetry-otlp",
+    "dep:opentelemetry_sdk",
+    "dep:tonic",
+    "dep:tracing-opentelemetry",
+    "tokio/time",
+]
+
+[lints.rust]
+warnings = "deny"
+unsafe_code = "forbid"
+
+[lints.clippy]
+nursery = { level = "allow", priority = -1 }
+pedantic = "deny"
+all = "deny"
+correctness = "deny"
+suspicious = "deny"
+perf = "deny"
+complexity = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+await_holding_lock = "deny"
+needless_borrow = "deny"
+needless_collect = "deny"
+large_stack_arrays = "deny"
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4.6", default-features = false, features = ["std", "color", "help", "usage", "error-context", "suggestions", "env"] }
+fs2 = "0.4"
+prost = "0.14"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2", "json"] }
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+rustix = { version = "1", features = ["fs", "process", "net"] }
+opentelemetry = { version = "0.33.1", default-features = false, features = ["trace"], optional = true }
+opentelemetry-otlp = { version = "0.33.1", default-features = false, features = ["grpc-tonic", "tls-ring", "tls-webpki-roots", "trace"], optional = true }
+opentelemetry_sdk = { version = "0.33.1", default-features = false, features = ["trace", "internal-logs"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "macros", "fs", "io-util", "io-std", "time", "net", "signal", "sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+toml = { version = "1.1", default-features = false, features = ["std", "parse", "serde"] }
+tonic = { version = "0.14.6", default-features = false, features = ["tls-ring", "tls-webpki-roots"], optional = true }
+tracing = "0.1"
+tracing-opentelemetry = { version = "0.34", default-features = false, optional = true }
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+url = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+axum = "0.8"
+axum-server = { version = "0.8", features = ["tls-rustls-no-provider"] }
+rcgen = "0.14"
+rustix = { version = "1", features = ["pipe"] }
+tempfile = "3"
+tokio = { version = "1", features = ["process"] }
+
+[build-dependencies]
+built = { version = "0.8.1", features = ["git2"] }
+
+[package.metadata.deb]
+maintainer = "Team Pulse.live <team@pulse.live>"
+copyright = "2017, pulse.live"
+license-file = ["LICENSE", "0"]
+section = "net"
+priority = "optional"
+# Release packages contain a verified static musl binary.
+depends = ""
+default-features = false
+features = []
+conflicts = "pulse-telemetry"
+replaces = "pulse-telemetry"
+extended-description = "Autonomous HTTP monitoring with local resource limits and an optional HTTPS control plane. Installation does not activate monitoring or enroll an agent."
+assets = [
+    ["target/release/pulse", "usr/bin/pulse", "755"],
+    ["LICENSE", "usr/share/doc/pulse/LICENSE", "644"],
+    ["README.md", "usr/share/doc/pulse/README.md", "644"],
+    [".github/SECURITY.md", "usr/share/doc/pulse/SECURITY.md", "644"],
+    ["examples/pulse.toml", "usr/share/doc/pulse/examples/pulse.toml", "644"],
+    ["examples/managed-edge.toml", "usr/share/doc/pulse/examples/managed-edge.toml", "644"],
+]
+
+[package.metadata.deb.variants.telemetry]
+name = "pulse-telemetry"
+features = ["telemetry"]
+conflicts = "pulse"
+replaces = "pulse"
+provides = "pulse"
+
+[package.metadata.generate-rpm]
+release = "1"
+auto-req = "no"
+require-sh = false
+conflicts = { pulse-telemetry = "*" }
+assets = [
+    { source = "target/release/pulse", dest = "/usr/bin/pulse", mode = "755" },
+    { source = "LICENSE", dest = "/usr/share/licenses/pulse/LICENSE", mode = "644", doc = true },
+    { source = "README.md", dest = "/usr/share/doc/pulse/README.md", mode = "644", doc = true },
+    { source = ".github/SECURITY.md", dest = "/usr/share/doc/pulse/SECURITY.md", mode = "644", doc = true },
+    { source = "examples/pulse.toml", dest = "/usr/share/doc/pulse/examples/pulse.toml", mode = "644", doc = true },
+    { source = "examples/managed-edge.toml", dest = "/usr/share/doc/pulse/examples/managed-edge.toml", mode = "644", doc = true },
+]
+
+[package.metadata.generate-rpm.variants.telemetry]
+name = "pulse-telemetry"
+conflicts = { pulse = "*" }
+provides = { pulse = "*" }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true

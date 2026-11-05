@@ -1,0 +1,156 @@
+---
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]*'
+      - '[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag on main, for example v0.1.0
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pulse-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify version tag and main ancestry
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      commit: ${{ steps.verify.outputs.commit }}
+      prerelease: ${{ steps.verify.outputs.prerelease }}
+    steps:
+      - name: Validate tag syntax
+        id: tag
+        shell: bash
+        env:
+          PULSE_RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$PULSE_RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
+            echo '::error::Use an existing version tag such as v0.1.0 or v0.1.0-rc.1'
+            exit 1
+          fi
+          printf 'tag=%s\n' "$PULSE_RELEASE_TAG" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          ref: refs/tags/${{ steps.tag.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify main ancestry and Cargo version
+        id: verify
+        shell: bash
+        env:
+          PULSE_RELEASE_TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse --verify "refs/tags/$PULSE_RELEASE_TAG^{commit}")
+          git merge-base --is-ancestor "$commit" refs/remotes/origin/main || {
+            echo '::error::Release tag must point to a commit in main history'
+            exit 1
+          }
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          if [[ "${PULSE_RELEASE_TAG#v}" != "$version" ]]; then
+            echo '::error::Release tag must match package.version in Cargo.toml'
+            exit 1
+          fi
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+          if [[ "$version" == *-* ]]; then
+            echo 'prerelease=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'prerelease=false' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: verify
+    uses: ./.github/workflows/build.yml
+    with:
+      ref: ${{ needs.verify.outputs.commit }}
+    secrets:
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  release:
+    name: Publish verified archives and packages
+    needs: [verify, build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download all binary artifacts
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+        with:
+          pattern: pulse-binary-*
+          merge-multiple: true
+          path: dist
+      - name: Verify checksums and complete artifact set
+        id: verify-artifacts
+        shell: bash
+        env:
+          PULSE_RELEASE_TAG: ${{ needs.verify.outputs.tag }}
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          artifacts=(*.tar.gz *.deb *.rpm)
+          checksums=(*.sha256)
+          if [[ ${#artifacts[@]} -ne 12 || ${#checksums[@]} -ne 12 ]]; then
+            echo '::error::Expected all three formats, both architectures and both feature configurations'
+            exit 1
+          fi
+          version="${PULSE_RELEASE_TAG#v}"
+          # Keep the replacement tilde literal in Bash.
+          native_version="${version//-/\~}"
+          for platform in x86_64-unknown-linux-musl:amd64:x86_64 aarch64-unknown-linux-musl:arm64:aarch64; do
+            IFS=: read -r target deb_arch rpm_arch <<< "$platform"
+            for suffix in '' '-telemetry'; do
+              package="pulse$suffix"
+              expected=(
+                "pulse-$version-$target$suffix.tar.gz"
+                "${package}_${native_version}-1_${deb_arch}.deb"
+                "$package-$native_version-1.$rpm_arch.rpm"
+              )
+              for artifact in "${expected[@]}"; do
+                if [[ ! -f "$artifact" || ! -f "$artifact.sha256" ]]; then
+                  echo '::error::A required format, architecture or feature artifact is missing'
+                  exit 1
+                fi
+                mapfile -t record < "$artifact.sha256"
+                if [[ ${#record[@]} -ne 1 ]]; then
+                  echo '::error::Each checksum file must contain exactly one record'
+                  exit 1
+                fi
+                IFS=' ' read -r digest referenced <<< "${record[0]}"
+                if [[ ! "$digest" =~ ^[[:xdigit:]]{64}$ || "$referenced" != "$artifact" ]]; then
+                  echo '::error::Checksum record must match its artifact'
+                  exit 1
+                fi
+              done
+            done
+          done
+          sha256sum --check -- "${checksums[@]}"
+          sha256sum -- "${artifacts[@]}" > SHA256SUMS
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3
+        with:
+          tag_name: ${{ needs.verify.outputs.tag }}
+          target_commitish: ${{ needs.verify.outputs.commit }}
+          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          overwrite_files: false
+          files: |
+            dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/SHA256SUMS

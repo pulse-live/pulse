@@ -1,0 +1,46 @@
+syntax = "proto3";
+package pulse.v1;
+
+// Draft v1. Field numbers match src/observation.rs; no protoc build is required.
+enum Outcome {
+  OUTCOME_UNSPECIFIED = 0;
+  PASS = 1;
+  FAIL = 2;
+  ERROR = 3;
+  SKIPPED = 4;
+}
+enum Origin {
+  ORIGIN_UNSPECIFIED = 0;
+  ROUTINE = 1;
+  LIVE = 2;
+  COMMUNITY = 3;
+  MANUAL = 4;
+}
+message Observation {
+  string id = 1;
+  string assignment_id = 2;
+  string monitor_id = 3;
+  uint64 revision = 4;
+  Origin origin = 5;
+  optional string command_id = 6;
+  optional string run_id = 7;
+  uint64 started_unix_ms = 8;
+  uint64 completed_unix_ms = 9;
+  uint64 total_duration_us = 10;
+  Outcome outcome = 11;
+  optional string error = 12;
+  optional uint32 http_status = 13;
+  optional string resolved_address = 14;
+  uint32 redirects = 15;
+  uint64 inspected_bytes = 16;
+  optional uint64 content_length = 17;
+  bool body_truncated = 18;
+  optional uint64 dns_duration_us = 19;
+  optional uint64 tcp_duration_us = 20;
+  optional uint64 tls_duration_us = 21;
+  optional uint64 ttfb_us = 22;
+}
+message Batch {
+  uint32 schema_version = 1;
+  repeated Observation observations = 2;
+}

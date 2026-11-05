@@ -1,1 +1,4 @@
 /target
+/.pulse/
+/dist/
+/lcov.info

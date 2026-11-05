@@ -1,0 +1,26 @@
+# Enroll explicitly into this state directory before starting the agent.
+# Public-edge deployment identity comes from trusted server-side provisioning.
+[agent]
+mode = "managed"
+control_plane_url = "https://api.pulse.live"
+state_dir = ".pulse/edge"
+sync_interval_ms = 30000
+long_poll = true
+
+[network]
+allow_private_networks = false
+
+[resources] # Alias for [limits]; do not specify both tables.
+max_concurrent_probes = 32
+max_checks = 4096
+max_probe_starts_per_second = 5
+max_connections = 64
+max_probe_memory_bytes = 134217728
+max_response_bytes = 32768
+max_spool_mb = 32
+reserved_urgent_probes = 1
+
+[community]
+enabled = false
+max_concurrent_probes = 1
+max_checks_per_hour = 60

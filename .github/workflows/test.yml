@@ -1,0 +1,103 @@
+---
+name: Test
+
+on:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to check out; defaults to the triggering commit
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_NET_RETRY: '5'
+
+jobs:
+  quality:
+    name: Formatting, checks and Clippy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+        with:
+          components: rustfmt, clippy
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-quality-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      - name: Install workflow test dependency
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends python3-yaml
+      - name: Test release validation
+        run: /usr/bin/python3 tests/release_workflows.py
+      - run: cargo fmt --all -- --check
+      - run: cargo check --locked
+      - run: cargo check --all-features --locked
+      - run: cargo clippy --all-targets --locked
+      - run: cargo clippy --all-targets --all-features --locked
+      - name: Verify diagnostic dependencies remain optional
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree --locked --no-default-features --edges normal --prefix none --format '{p}')
+          if printf '%s\n' "$tree" | grep -E '^(opentelemetry[^ ]*|tracing-opentelemetry|tonic[^ ]*) v'; then
+            echo '::error::Default runtime dependencies must exclude OpenTelemetry and tonic'
+            exit 1
+          fi
+
+  test:
+    name: Default and telemetry tests
+    needs: quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+      # HTTPS fixtures run locally with an explicit test CA; no Cloud account or service is needed.
+      - run: cargo test --locked
+      - run: cargo test --all-features --locked
+
+  msrv:
+    name: Rust 1.88
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+        with:
+          toolchain: 1.88.0
+      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25  # v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-msrv-1.88-${{ hashFiles('Cargo.lock') }}
+      - run: cargo +1.88.0 check --all-targets --all-features --locked

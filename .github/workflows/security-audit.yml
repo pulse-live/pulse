@@ -1,0 +1,35 @@
+---
+name: Security Audit
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to check out; defaults to the triggering commit
+        required: false
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit locked dependencies
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
+        with:
+          ref: ${{ inputs.ref || github.sha }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec  # stable
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b  # v2
+        with:
+          tool: cargo-audit@0.22.2
+          fallback: none
+      - run: cargo audit --deny warnings
