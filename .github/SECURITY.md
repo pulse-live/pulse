@@ -10,7 +10,8 @@ compatibility contract.
 ## Report a vulnerability
 
 Do not publish vulnerabilities, credentials or private monitoring targets in
-GitHub issues or pull requests. Email [nbari@tequila.io](mailto:nbari@tequila.io)
+GitHub issues or pull requests. Email the Pulse team at
+[team@pulse.live](mailto:team@pulse.live)
 with the subject `Pulse security report` and include:
 
 - Affected version and Git commit, operating system and enabled Cargo features.
@@ -26,9 +27,9 @@ Remove enrollment tokens, bearer credentials, OTLP headers and private endpoint
 details from attachments. Do not upload the state database: it contains credentials.
 Do not test against unrelated endpoints or production routing infrastructure.
 
-Maintainers will assess the report and coordinate mitigation and disclosure with
-you. Please allow time for a fix before publishing exploit details. Response and
-remediation times depend on severity and maintainer availability.
+The Pulse team will assess the report and coordinate mitigation and disclosure
+with you. Please allow time for a fix before publishing exploit details. Response
+and remediation times depend on severity and maintainer availability.
 
 ## Scope and deployment
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Package a previously built, native musl binary without rebuilding or activating it.
 set -euo pipefail
+trap 'printf "Packaging failed (exit %s) at line %s: %s\n" "$?" "$LINENO" "$BASH_COMMAND" >&2' ERR
 
 target=${1:?Usage: package-release.sh TARGET [default|telemetry] [OUTPUT_DIR]}
 feature_set=${2:-default}
@@ -74,7 +75,12 @@ done
 
 dpkg-deb --extract "$output_dir/$deb_name" "$stage_dir/deb"
 mkdir "$stage_dir/rpm"
-rpm2cpio "$output_dir/$rpm_name" | (cd "$stage_dir/rpm" && cpio -idm --quiet --no-absolute-filenames --no-preserve-owner)
+# RPM 4.18's rpm2cpio exits 1 when the optional archive-size tag is absent,
+# even after emitting a complete payload. rpm2archive reads the file records.
+# Use stdin/stdout explicitly across RPM versions and retain every failure.
+rpm2archive --nocompression - < "$output_dir/$rpm_name" > "$stage_dir/rpm.tar"
+tar --extract --file "$stage_dir/rpm.tar" --directory "$stage_dir/rpm" \
+    --no-same-owner --same-permissions
 for format in deb rpm; do
     extracted="$stage_dir/$format/usr/bin/pulse"
     cmp "$binary" "$extracted"

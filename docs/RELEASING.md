@@ -37,6 +37,8 @@ for **12 release files** in total. All use the locked dependencies and release
 profile. Both feature sets are smoke-tested with help, short/long version and
 validation of both example configurations. Native package payloads are extracted
 and checked against the original executable before checksums are generated.
+RPM payloads are converted with `rpm2archive` and extracted with `tar`; this also
+supports RPM 4.18 when a package omits the optional legacy archive-size tag.
 Ordinary main builds retain all files and individual SHA-256 files for 14 days.
 
 | Rust target | Debian architecture | RPM architecture |
@@ -81,7 +83,7 @@ before stable versions. Archive names retain the original Cargo version.
 ## Package locally
 
 Use a native Linux host for the target architecture with musl, binutils, Python
-3.11+, `dpkg-deb`, RPM query/extraction tools and cpio installed. Install the same
+3.11+, `dpkg-deb`, `rpm`, `rpm2archive` and GNU tar installed. Install the same
 packager versions as CI:
 
 ```sh

@@ -1,3 +1,7 @@
+[![Tests and build](https://github.com/pulse-live/pulse/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/pulse-live/pulse/actions/workflows/build.yml)
+[![codecov](https://codecov.io/gh/pulse-live/pulse/graph/badge.svg?token=l4kknNVRYG)](https://codecov.io/gh/pulse-live/pulse)
+[![License: BSD-3-Clause](https://img.shields.io/badge/License-BSD--3--Clause-blue.svg)](LICENSE)
+
 # Pulse
 
 A lightweight, autonomous monitoring agent written in Rust using Tokio.
