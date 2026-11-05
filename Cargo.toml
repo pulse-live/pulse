@@ -1,5 +1,6 @@
 [package]
 name = "pulse"
+publish = false
 version = "0.1.0"
 authors = ["Team Pulse.live <team@pulse.live>"]
 description = "A lightweight, autonomous monitoring agent for endpoint probing and infrastructure telemetry"
