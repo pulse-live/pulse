@@ -169,7 +169,7 @@ just clippy      # Strict lints for every target and feature
 just test        # Default and all-feature test suites
 just ci          # Formatting, checks, Clippy, and tests
 just coverage    # All-feature coverage summary
-just workflow-test # Release validation tests (Python 3.11+ and PyYAML)
+just release     # Release develop (see docs/RELEASING.md); needs gh logged in
 just measure     # Local Linux load/overload/timeout measurements
 ```
 
@@ -235,16 +235,16 @@ an unchanged Rust test run. Report actual commands, results, and limitations.
 ## CI and release maintenance
 
 - Keep tests, coverage, dependency audit and native release builds in their existing
-  reusable workflows. Update [RELEASING.md](docs/RELEASING.md) when triggers, assets
-  or release behavior change; avoid duplicate CI entry points. Run
-  `just workflow-test` when changing release validation or artifact names.
+  reusable workflows and local actions. Update [RELEASING.md](docs/RELEASING.md) when
+  triggers, assets or release behavior change; avoid duplicate CI entry points.
 - Pin external actions to reviewed commit SHAs with upstream ref comments. Keep
   repository permissions read-only outside the publication job and disable
   persisted checkout credentials. Optional Codecov secrets belong only to uploads.
-- Release only a version-matched tag in main history. Pass the verified commit SHA
-  to every reused workflow and require all checks, both architectures and both
-  feature sets before publishing checksummed archives, DEB and RPM packages. Keep
-  version tags immutable.
+- Release with `just release` from `develop` only. The version bump is the last
+  commit on `sandbox`; the release guard requires a green `CI OK` on that commit,
+  builds both architectures and both feature sets, and publishes checksummed
+  archives, DEB and RPM packages; GitHub creates the `X.Y.Z` tag. Do not push tags
+  by hand, and use a new version instead of changing a published one.
 - Preserve [the security reporting policy](.github/SECURITY.md), the private report
   contact and the distinction between this agent and Pulse Cloud.
 - Keep standard native packages telemetry-free; use the explicitly named telemetry

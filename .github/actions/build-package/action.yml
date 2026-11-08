@@ -1,0 +1,95 @@
+name: Build and package
+description: >-
+  Build the locked release binary of one musl target and feature set, smoke-test it, and
+  package the .tar.gz, .deb and .rpm into dist/ with scripts/package-release.sh. Used by
+  Test & Build (every push) and by the release, so a release builds exactly what CI built.
+  Expects the repository to be checked out and a native runner for the target.
+inputs:
+  target:
+    description: x86_64-unknown-linux-musl or aarch64-unknown-linux-musl.
+    required: true
+  feature-set:
+    description: default or telemetry.
+    required: true
+  toolchain:
+    description: stable, or an exact version such as 1.99.1 (a release passes its resolved one).
+    required: false
+    default: stable
+runs:
+  using: composite
+  steps:
+    - uses: ./.github/actions/rust-toolchain
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        targets: ${{ inputs.target }}
+
+    - name: Install native build and package tools
+      shell: bash
+      run: |
+        sudo apt-get update -y
+        sudo apt-get install -y --no-install-recommends musl-tools binutils rpm dpkg-dev liblzma-dev pkg-config
+
+    # Downloaded crate sources only, never build output, so a build is always from scratch.
+    - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-registry-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock') }}
+        restore-keys: cargo-registry-${{ runner.os }}-${{ runner.arch }}-
+
+    # Compiling both packagers dominates the job, so the installed binaries are cached; the
+    # key holds their pinned versions and the compiler version, so a change installs afresh
+    # and a binary built by another compiler is never restored.
+    - id: rustc
+      shell: bash
+      run: echo "version=$(rustc --version | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+    - id: packagers
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+      with:
+        path: |
+          ~/.cargo/bin/cargo-deb
+          ~/.cargo/bin/cargo-generate-rpm
+        key: packagers-${{ runner.os }}-${{ runner.arch }}-rustc-${{ steps.rustc.outputs.version }}-deb-3.8.0-rpm-0.21.1
+
+    - if: steps.packagers.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        cargo install cargo-deb --version 3.8.0 --locked
+        cargo install cargo-generate-rpm --version 0.21.1 --locked
+
+    - name: Build the release binary
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        FEATURE_SET: ${{ inputs.feature-set }}
+      run: |
+        set -euo pipefail
+        features=()
+        if [[ "${FEATURE_SET}" == telemetry ]]; then
+          features=(--features telemetry)
+        fi
+        cargo build --release --locked --no-default-features --target "${TARGET}" "${features[@]}"
+
+    - name: Smoke-test the binary
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+      run: |
+        set -euo pipefail
+        binary="target/${TARGET}/release/pulse"
+        "${binary}" --help > /dev/null
+        "${binary}" -V
+        "${binary}" --version
+        "${binary}" config validate --file examples/pulse.toml
+        "${binary}" config validate --file examples/managed-edge.toml
+
+    - name: Package and validate the archive, DEB and RPM
+      shell: bash
+      env:
+        TARGET: ${{ inputs.target }}
+        FEATURE_SET: ${{ inputs.feature-set }}
+      run: bash scripts/package-release.sh "${TARGET}" "${FEATURE_SET}"

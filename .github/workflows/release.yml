@@ -1,156 +1,294 @@
 ---
 name: Release
 
+# Run manually on `develop` (`just release`). The commit is the one Test & Build already
+# passed on develop; nothing is bumped or committed here. The run builds that commit and
+# publishes the GitHub release, which creates the tag. `main` is moved by `just release`
+# once this run has succeeded and develop's own Test & Build has finished (a still-pending
+# `CI OK` blocks protected-branch updates, even for the workflow's token). A failed job is
+# fixed by "Re-run failed jobs"; nothing is published before every build job has succeeded.
 on:
-  push:
-    tags:
-      - 'v[0-9]*'
-      - '[0-9]*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing version tag on main, for example v0.1.0
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: pulse-release-${{ inputs.tag || github.ref_name }}
+  group: release
   cancel-in-progress: false
 
 jobs:
-  verify:
-    name: Verify version tag and main ancestry
-    runs-on: ubuntu-24.04
-    timeout-minutes: 5
-    outputs:
-      tag: ${{ steps.tag.outputs.tag }}
-      commit: ${{ steps.verify.outputs.commit }}
-      prerelease: ${{ steps.verify.outputs.prerelease }}
-    steps:
-      - name: Validate tag syntax
-        id: tag
-        shell: bash
-        env:
-          PULSE_RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
-        run: |
-          set -euo pipefail
-          if [[ ! "$PULSE_RELEASE_TAG" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z][0-9A-Za-z.-]*)?$ ]]; then
-            echo '::error::Use an existing version tag such as v0.1.0 or v0.1.0-rc.1'
-            exit 1
-          fi
-          printf 'tag=%s\n' "$PULSE_RELEASE_TAG" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7
-        with:
-          ref: refs/tags/${{ steps.tag.outputs.tag }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Verify main ancestry and Cargo version
-        id: verify
-        shell: bash
-        env:
-          PULSE_RELEASE_TAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          commit=$(git rev-parse --verify "refs/tags/$PULSE_RELEASE_TAG^{commit}")
-          git merge-base --is-ancestor "$commit" refs/remotes/origin/main || {
-            echo '::error::Release tag must point to a commit in main history'
-            exit 1
-          }
-          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
-          if [[ "${PULSE_RELEASE_TAG#v}" != "$version" ]]; then
-            echo '::error::Release tag must match package.version in Cargo.toml'
-            exit 1
-          fi
-          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
-          if [[ "$version" == *-* ]]; then
-            echo 'prerelease=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'prerelease=false' >> "$GITHUB_OUTPUT"
-          fi
-
-  build:
-    needs: verify
-    uses: ./.github/workflows/build.yml
-    with:
-      ref: ${{ needs.verify.outputs.commit }}
-    secrets:
-      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
-
-  release:
-    name: Publish verified archives and packages
-    needs: [verify, build]
+  guard:
+    name: Release guard
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: write
+      contents: read
+      actions: read
+    outputs:
+      version: ${{ steps.check.outputs.version }}
+      package: ${{ steps.check.outputs.package }}
+      rust: ${{ steps.rust.outputs.version }}
     steps:
-      - name: Download all binary artifacts
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333  # v8.0.2
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          pattern: pulse-binary-*
-          merge-multiple: true
-          path: dist
-      - name: Verify checksums and complete artifact set
-        id: verify-artifacts
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the package name and version
+        id: info
+        uses: ./.github/actions/crate-info
+
+      # `stable` moves every few weeks and "Re-run failed jobs" can run a leg hours later, so
+      # it is resolved once here: every job of this run installs exactly this version, and a
+      # re-run keeps this job's output. Nothing in the repository has to be bumped.
+      - name: Resolve the Rust toolchain for this run
+        id: rust
         shell: bash
-        env:
-          PULSE_RELEASE_TAG: ${{ needs.verify.outputs.tag }}
         run: |
           set -euo pipefail
-          cd dist
-          shopt -s nullglob
-          artifacts=(*.tar.gz *.deb *.rpm)
-          checksums=(*.sha256)
-          if [[ ${#artifacts[@]} -ne 12 || ${#checksums[@]} -ne 12 ]]; then
-            echo '::error::Expected all three formats, both architectures and both feature configurations'
+          rustup toolchain install stable --profile minimal
+          version="$(rustc +stable --version | awk '{print $2}')"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Could not resolve stable to an exact version (got '${version}')."
             exit 1
           fi
-          version="${PULSE_RELEASE_TAG#v}"
-          # Keep the replacement tilde literal in Bash.
-          native_version="${version//-/\~}"
-          for platform in x86_64-unknown-linux-musl:amd64:x86_64 aarch64-unknown-linux-musl:arm64:aarch64; do
-            IFS=: read -r target deb_arch rpm_arch <<< "$platform"
-            for suffix in '' '-telemetry'; do
-              package="pulse$suffix"
-              expected=(
-                "pulse-$version-$target$suffix.tar.gz"
-                "${package}_${native_version}-1_${deb_arch}.deb"
-                "$package-$native_version-1.$rpm_arch.rpm"
-              )
-              for artifact in "${expected[@]}"; do
-                if [[ ! -f "$artifact" || ! -f "$artifact.sha256" ]]; then
-                  echo '::error::A required format, architecture or feature artifact is missing'
-                  exit 1
-                fi
-                mapfile -t record < "$artifact.sha256"
-                if [[ ${#record[@]} -ne 1 ]]; then
-                  echo '::error::Each checksum file must contain exactly one record'
-                  exit 1
-                fi
-                IFS=' ' read -r digest referenced <<< "${record[0]}"
-                if [[ ! "$digest" =~ ^[[:xdigit:]]{64}$ || "$referenced" != "$artifact" ]]; then
-                  echo '::error::Checksum record must match its artifact'
-                  exit 1
-                fi
-              done
-            done
-          done
-          sha256sum --check -- "${checksums[@]}"
-          sha256sum -- "${artifacts[@]}" > SHA256SUMS
-      - name: Publish GitHub release
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3  # v3
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "This release is built with Rust ${version}."
+
+      - name: Check the commit can be released
+        id: check
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INFO_NAME: ${{ steps.info.outputs.name }}
+          INFO_VERSION: ${{ steps.info.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" != refs/heads/develop ]]; then
+            echo "::error::Run the release on develop (got ${GITHUB_REF})."
+            exit 1
+          fi
+          version="${INFO_VERSION}"
+          package="${INFO_NAME}"
+          if [[ ! "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Cargo.toml has no X.Y.Z version (found '${version}')."
+            exit 1
+          fi
+          if git rev-parse -q --verify "refs/tags/${version}" >/dev/null; then
+            echo "::error::${version} is already tagged; bump the version on develop first."
+            exit 1
+          fi
+          latest="$(git tag --list '[0-9]*.[0-9]*.[0-9]*' | sort -V | tail -n 1)"
+          if [[ -n "${latest}" && "$(printf '%s\n%s\n' "${latest}" "${version}" | sort -V | tail -n 1)" != "${version}" ]]; then
+            echo "::error::${version} is below the latest release ${latest}; bump to a higher version."
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor origin/main "${GITHUB_SHA}"; then
+            echo "::error::main has commits that develop does not; merge main into develop first."
+            exit 1
+          fi
+          # `CI OK` is Test & Build's aggregate of every gating job; it must have
+          # succeeded on exactly this commit (a non-gating job, such as coverage, failing
+          # does not block the release).
+          passed="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/check-runs?check_name=CI%20OK&status=completed" \
+            --jq '[.check_runs[] | select(.conclusion == "success")] | length')"
+          if [[ "${passed}" -lt 1 ]]; then
+            echo "::error::${GITHUB_SHA} has no successful CI OK check; wait for Test & Build to pass on develop."
+            exit 1
+          fi
+          {
+            echo "version=${version}"
+            echo "package=${package}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Releasing ${package} ${version} from ${GITHUB_SHA} (CI OK passed)."
+
+  # One leg per target and feature set, each on a native runner. Keep the release's expected
+  # file set below in step with this matrix.
+  build:
+    name: Build and package (${{ matrix.target }} / ${{ matrix.feature-set }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            feature-set: default
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            feature-set: telemetry
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            feature-set: default
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            feature-set: telemetry
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          tag_name: ${{ needs.verify.outputs.tag }}
-          target_commitish: ${{ needs.verify.outputs.commit }}
-          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          overwrite_files: false
-          files: |
+          persist-credentials: false
+
+      - name: Build and package
+        uses: ./.github/actions/build-package
+        with:
+          target: ${{ matrix.target }}
+          feature-set: ${{ matrix.feature-set }}
+          toolchain: ${{ needs.guard.outputs.rust }}
+
+      - name: Upload the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: dist-${{ matrix.target }}-${{ matrix.feature-set }}
+          path: |
             dist/*.tar.gz
             dist/*.deb
             dist/*.rpm
-            dist/SHA256SUMS
+          if-no-files-found: error
+
+  release:
+    name: GitHub release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs:
+      - guard
+      - build
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
+      RUST: ${{ needs.guard.outputs.rust }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+
+      # Keep this list in step with the build matrix: a missing or extra file stops the release.
+      - name: Check the release files
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="$(
+            {
+              for platform in x86_64-unknown-linux-musl:amd64:x86_64 aarch64-unknown-linux-musl:arm64:aarch64; do
+                IFS=: read -r target deb_arch rpm_arch <<< "${platform}"
+                for variant in '' '-telemetry'; do
+                  echo "pulse-${VERSION}-${target}${variant}.tar.gz"
+                  echo "pulse${variant}_${VERSION}-1_${deb_arch}.deb"
+                  echo "pulse${variant}-${VERSION}-1.${rpm_arch}.rpm"
+                done
+              done
+            } | sort
+          )"
+          actual="$(ls dist | sort)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::The built files differ from the expected set."
+            diff <(echo "${expected}") <(echo "${actual}") || true
+            exit 1
+          fi
+
+      - name: Write the checksums
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: dist/*
+
+      # The notes are the commit subjects since the previous release (version bumps left
+      # out), so no changelog is kept by hand and every re-run writes the same text.
+      - name: Write the release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          previous="$(git describe --tags --abbrev=0 --match '[0-9]*.[0-9]*.[0-9]*' "${GITHUB_SHA}" 2>/dev/null || true)"
+          range="${GITHUB_SHA}"
+          [[ -z "${previous}" ]] || range="${previous}..${GITHUB_SHA}"
+          changes="$(git log --no-merges --format='- %s (%h)' "${range}" | grep -vE '^- bump version to [0-9]+\.[0-9]+\.[0-9]+ ' || true)"
+          {
+            echo "## Changes"
+            echo
+            echo "${changes:-- Only the version bump.}"
+            if [[ -n "${previous}" ]]; then
+              echo
+              echo "**Full changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${previous}...${VERSION}"
+            fi
+            echo
+            echo "## Verify a download"
+            echo
+            echo '```sh'
+            echo 'sha256sum --check --ignore-missing SHA256SUMS'
+            echo "gh attestation verify <file> --repo ${GITHUB_REPOSITORY} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml"
+            echo '```'
+            echo
+            echo "Built with Rust ${RUST}."
+          } > "${RUNNER_TEMP}/notes.md"
+          cat "${RUNNER_TEMP}/notes.md"
+
+      # Assets go on a draft first: publishing creates the tag at the tested commit, and
+      # an immutable release accepts no uploads afterwards. A draft left by a failed run
+      # is replaced; a published release is left alone.
+      - name: Create the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if state="$(gh release view "${VERSION}" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            if [[ "${state}" == false ]]; then
+              echo "Release ${VERSION} is already published."
+              exit 0
+            fi
+            gh release delete "${VERSION}" --yes
+          fi
+          gh release create "${VERSION}" dist/* \
+            --draft \
+            --target "${GITHUB_SHA}" \
+            --title "${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/notes.md"
+          gh release edit "${VERSION}" --draft=false --latest
+
+      # What a user can download must be exactly what was built, and the tag must sit on the
+      # tested commit. This also runs when a re-run finds the release already published.
+      - name: Check the published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${VERSION}" --jq '.object.sha')"
+          if [[ "${tag_sha}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::Tag ${VERSION} points at ${tag_sha}, not at the tested commit ${GITHUB_SHA}."
+            exit 1
+          fi
+          expected="$(ls dist | sort)"
+          actual="$(gh release view "${VERSION}" --json assets --jq '.assets[].name' | sort)"
+          if [[ "${actual}" != "${expected}" ]]; then
+            echo "::error::Release ${VERSION} holds: $(tr '\n' ' ' <<<"${actual}"); expected: $(tr '\n' ' ' <<<"${expected}")."
+            exit 1
+          fi
+          # The bytes too: download what a user would get and compare it with what was built.
+          published="${RUNNER_TEMP}/published"
+          rm -rf "${published}"
+          gh release download "${VERSION}" --dir "${published}"
+          if ! diff <(cd dist && sha256sum -- * | sort -k2) <(cd "${published}" && sha256sum -- * | sort -k2); then
+            echo "::error::The published files differ from the files that were built."
+            exit 1
+          fi
+          echo "Release ${VERSION} is on ${GITHUB_SHA} with $(wc -l <<<"${actual}") files."

@@ -1,21 +1,25 @@
 # CI and releases
 
-Pulse uses reusable GitHub Actions workflows with read-only repository access.
-Only the final GitHub release job receives `contents: write`. External actions are
-pinned to commit SHAs; version comments identify the corresponding upstream refs.
-Build is the single pull-request entry point, so tests, coverage and audit run once
-while every architecture/feature combination also exercises native packaging.
-Release-gate regressions run through `just workflow-test` (Python 3.11+ and
-PyYAML), using isolated Git and artifact fixtures. They cover tag/version checks,
-main ancestry, prereleases, complete artifact sets and malformed checksums.
+Pulse uses reusable GitHub Actions workflows and small local actions with read-only
+repository access. Only the final GitHub release job receives `contents: write`.
+External actions are pinned to commit SHAs; version comments identify the corresponding
+upstream refs. Build is the single pull-request entry point, so tests, coverage and
+audit run once while every architecture/feature combination also exercises native
+packaging. Its aggregate `CI OK` job (tests, audit and the four builds) is the check
+that branch protection and the release guard require; coverage is reported but does not
+gate.
 
 | Workflow | Trigger and responsibility |
 | --- | --- |
 | `test.yml` | Manual runs or reuse: formatting, both feature sets, strict Clippy, tests and Rust 1.88 |
 | `coverage.yml` | Manual runs or reuse: all-feature LCOV report and a retained coverage artifact |
 | `security-audit.yml` | Daily, manual runs, or reuse: audit the tracked lockfile |
-| `build.yml` | Pull requests, pushes to main, manual runs, or reuse: invoke tests/coverage/audit and build native Linux release files |
-| `release.yml` | Version tag pushes or a manual existing-tag selection: verify the source, build and publish release files |
+| `build.yml` | Pull requests, pushes to main, develop and sandbox, manual runs: tests/coverage/audit, the four native builds and packages, then `CI OK` |
+| `release.yml` | Manual run on `develop` (`just release`): guard, the four builds, checksums, attestation and the GitHub release that creates the tag |
+
+The local actions `build-package` (build, smoke-test and package one target and feature
+set, used by both `build.yml` and `release.yml`), `rust-toolchain` and `crate-info`
+live in `.github/actions`.
 
 Coverage uses `cargo-llvm-cov`, matching `just coverage`. Its LCOV artifact is
 available for 14 days without external service credentials. To also upload to
@@ -78,7 +82,9 @@ sha256sum --check SHA256SUMS
 For a single downloaded file, select its matching checksum line. Native package
 versions map Cargo prerelease hyphens to `~`, so `0.1.0-rc.1` becomes
 `0.1.0~rc.1-1` in DEB and `0.1.0~rc.1` with release `1` in RPM; prereleases sort
-before stable versions. Archive names retain the original Cargo version.
+before stable versions. Archive names retain the original Cargo version. (The release
+workflow itself publishes `X.Y.Z` versions only; the packaging script keeps this
+mapping for local builds.)
 
 ## Package locally
 
@@ -109,38 +115,44 @@ work. Verify release checksums before installation.
 
 ## Create a release
 
-1. Update `package.version` in Cargo.toml and refresh Cargo.lock with `cargo check`.
-2. Run `just ci`, the MSRV check and `cargo audit --deny warnings`. Review changes
-   to the public protocol and deployment limitations before tagging.
-3. Merge the reviewed version commit into main. Create and push its version tag:
+A release is the commit CI already tested, built and published by one workflow run. The
+pattern and its rationale are documented in full in the
+[cron-when RELEASING.md](https://github.com/nbari/cron-when/blob/main/RELEASING.md);
+this section is the short version for Pulse.
 
-   ```sh
-   git tag -a v0.1.0 -m "Pulse 0.1.0"
-   git push origin v0.1.0
-   ```
+1. On `sandbox`, make the last commit of the work the version bump: `package.version`
+   in Cargo.toml and Cargo.lock (`cargo set-version --bump patch`). Versions are
+   `X.Y.Z`; the release flow does not publish prereleases. Commits must be signed.
+2. When **Build** (the `CI OK` check) is green on `sandbox`, fast-forward `develop` to
+   that commit and push. Keep `develop` fast-forward only.
+3. Run `just release`. It starts `release.yml` on `develop`, follows it, waits for
+   `develop`'s own Build run, and then pushes the released commit to `main`.
 
-The workflow also accepts `0.1.0` without the `v` prefix. Tags must match the
-manifest version exactly and resolve to a commit in main's history. Prerelease
-tags such as `v0.1.0-rc.1` require the same prerelease version in Cargo.toml and
-create a GitHub prerelease. Build metadata suffixes (`+...`) are not accepted.
-
-A manual run takes an existing tag; it does not create a new one:
-
-```sh
-gh workflow run release.yml --ref main -f tag=v0.1.0
+```mermaid
+flowchart TD
+    S["sandbox: work, then signed version bump last"] --> C["Build green: CI OK on the commit"]
+    C --> D["Fast-forward develop to that SHA"]
+    D --> J["just release"]
+    J --> G["Guard: develop, X.Y.Z above latest, CI OK on SHA, resolve Rust"]
+    G --> B["4 builds: 2 targets x 2 feature sets, archives, deb, rpm"]
+    B --> R["Release job: 12 files, SHA256SUMS, attestation, draft"]
+    R --> T["Publish release: GitHub creates the tag at the SHA"]
+    T --> V["Check tag and downloaded bytes"]
+    V --> M["just release waits for develop CI, pushes main"]
 ```
 
-Verification resolves annotated tags to a commit and passes that exact SHA into
-every reused workflow. Publication waits for tests, coverage, audit and all four
-builds, validates that each checksum record names its corresponding file, verifies
-every digest and requires all 12 files across formats, architectures and feature
-sets.
-The publication step leaves existing assets unchanged (`overwrite_files: false`).
-Treat version tags and published assets as immutable and use a new version when
-rebuilding changed code or dependencies.
+The guard refuses a run that is not on `develop`, a version that is already tagged or
+below the latest release, a `develop` that does not contain `main`, and a commit
+without a successful `CI OK`. It also resolves Rust `stable` to one exact version that
+every build uses; the release notes end with "Built with Rust X.Y.Z". Nothing is
+published before every build has succeeded, and the tag is created only by publishing
+the release. If a job fails, fix the cause and use "Re-run failed jobs"; a failure that
+needs a code change after the tag exists is released as the next version.
 
-Protect main with required status checks and protect version tags against
-unauthorized creation, movement and deletion. The workflow definitions themselves
-are release code and should receive the same review as Rust changes. GitHub-hosted
-runner execution and repository protections are configured in GitHub; local checks
-cannot establish those settings.
+Treat version tags and published assets as immutable. Never push a version tag by hand.
+
+Required repository settings: `main` protected with the `CI OK` check, signed commits,
+linear history and no force pushes; a tag ruleset for `[0-9]*.[0-9]*.[0-9]*` that
+allows creation but not update or deletion; commits signed with a key registered on
+GitHub. The workflow definitions are release code and receive the same review as Rust
+changes. Local checks cannot establish these settings.

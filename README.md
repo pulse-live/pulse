@@ -205,7 +205,7 @@ probe targets, logs or example files. Report vulnerabilities privately using the
 ```sh
 just ci         # fmt, default/all-feature checks, strict Clippy, both test suites
 just coverage   # requires cargo-llvm-cov and rustup LLVM tools
-just workflow-test # release-gate tests; requires Python 3.11+ and PyYAML
+just release    # release develop (see docs/RELEASING.md); needs gh logged in
 just measure    # Linux/Python 3 local load, overload and timeout measurements
 cargo +1.88.0 check --all-targets --all-features --locked
 cargo test --test managed --locked
@@ -223,7 +223,7 @@ Read [AGENTS.md](AGENTS.md), [architecture](docs/ARCHITECTURE.md), and the
 Cloud's dashboard, organizations, alerts, billing and fleet-wide incident decisions
 remain in the separate [Cloud repository](https://github.com/pulse-live/cloud).
 See [CI and releases](docs/RELEASING.md) for workflow triggers, optional Codecov
-configuration, Linux archives and version-tag releases.
+configuration, Linux archives and the release flow.
 
 ## License
 
